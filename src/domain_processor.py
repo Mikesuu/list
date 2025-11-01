@@ -5,16 +5,16 @@ import os
 import sys
 import json
 import socket 
+import datetime # <<< 修复：用于安全生成日期注释
 
 # --- 配置 (CONFIGURATION) ---
-# 远程数据源 URL
 REMOTE_DATA_URL = "https://raw.githubusercontent.com/gfwlist/gfwlist/master/gfwlist.txt"
 
 # --- DOH 配置 ---
-# 核心修复：直接使用 DOH 服务器的 IP 地址，绕过 Runner 的 DNS 故障
-DOH_IP = "104.16.249.249"
-DOH_HOSTNAME = "cloudflare-dns.com"
-TIMEOUT_SECONDS = 15 # 增加超时时间，以应对 Cloudflare 的限速
+# *** 切换到 Google DOH IP，以尝试绕过 Cloudflare 限速 ***
+DOH_IP = "8.8.8.8" 
+DOH_HOSTNAME = "dns.google" 
+TIMEOUT_SECONDS = 20 # 增加到 20 秒
 
 # --- 输出配置 (OUTPUT CONFIGURATION) ---
 OUTPUT_FILE = "fwd-ip-list.rsc"     
@@ -24,14 +24,14 @@ COMMENT_PREFIX = "RouteIP-"
 # --- 函数定义 (Functions) ---
 
 def doh_resolve(domain):
-    """使用 Cloudflare DOH API 解析域名并返回 IPv4 地址列表 (通过 IP 直连)"""
+    """使用 Google DOH API 解析域名并返回 IPv4 地址列表 (通过 IP 直连)"""
     
-    # 构建 URL，使用 IP 地址直连
-    url = f"https://{DOH_IP}/dns-query" 
+    # 使用 IP 地址直连 Google DOH API
+    url = f"https://{DOH_IP}/resolve" 
     
     headers = {
-        'accept': 'application/dns-json',
-        # 关键：显式设置 Host 头部，确保 SSL 证书验证和路由正确
+        'accept': 'application/json',
+        # 关键：显式设置 Host 头部，确保 SSL 证书验证
         'Host': DOH_HOSTNAME 
     }
     params = {
@@ -40,7 +40,6 @@ def doh_resolve(domain):
     }
     
     try:
-        # 使用 IP 地址连接，并传递 Hostname
         response = requests.get(url, params=params, headers=headers, timeout=TIMEOUT_SECONDS)
         response.raise_for_status()
         data = response.json()
@@ -49,18 +48,19 @@ def doh_resolve(domain):
         if 'Answer' in data:
             for answer in data['Answer']:
                 if answer['type'] == 1: # A record type
-                    ips.append(answer['data'])
+                    # Google DOH 响应中，IP 地址在 'data' 字段
+                    ips.append(answer['data']) 
         return ips
         
     except requests.exceptions.RequestException as e:
-        # 如果连接失败，打印信息以便调试
-        # print(f"DOH Connection failed for {domain}: {e}")
+        # 打印信息，帮助分析是否仍是限速或连接问题
+        print(f"DOH Connection/Resolution failed for {domain} (Google DOH)")
         return []
     except json.JSONDecodeError:
         return []
 
 def extract_domains(data_content):
-    """从 Base64 解码后的内容中提取域名"""
+    # ... (保持不变) ...
     domains = set()
     for line in data_content.splitlines():
         line = line.strip()
@@ -82,7 +82,7 @@ def extract_domains(data_content):
     return sorted(list(domains))
 
 def fetch_and_decode_data():
-    """下载并解码远程数据"""
+    # ... (保持不变) ...
     print(f"🌐 正在获取数据...")
     try:
         response = requests.get(REMOTE_DATA_URL, timeout=30)
@@ -98,9 +98,12 @@ def fetch_and_decode_data():
 
 def generate_mikrotik_rsc(domains):
     """生成 Mikrotik Address List (.rsc) 配置内容"""
+    
+    current_time = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    
     rsc_content = f"# IP Address List for Policy Routing\n"
-    rsc_content += f"# Generated at: {os.popen('date -u').read().strip()}\n"
-    rsc_content += f"# Source: Remote Domain List via DOH (Cloudflare IP)\n\n"
+    rsc_content += f"# Generated at: {current_time}\n"
+    rsc_content += f"# Source: Remote Domain List via DOH (Google IP)\n\n"
     
     rsc_content += f"/ip firewall address-list\n"
     rsc_content += f"remove [find list={ADDRESS_LIST_NAME}]\n\n"
