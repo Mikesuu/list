@@ -5,38 +5,28 @@ import os
 import sys
 import json
 import socket 
-import datetime # 用于生成安全的日期注释
+import datetime
 
-# --- 配置 (CONFIGURATION) ---
 REMOTE_DATA_URL = "https://raw.githubusercontent.com/gfwlist/gfwlist/master/gfwlist.txt"
 
-# --- DOH 配置 ---
-# 使用 Google DOH IP，绕过 Cloudflare 限速和 Runner 的 DNS 故障
 DOH_IP = "8.8.8.8" 
 DOH_HOSTNAME = "dns.google" 
-TIMEOUT_SECONDS = 20 # 增加超时时间以应对网络延迟或轻微限速
+TIMEOUT_SECONDS = 20 
 
-# --- 输出配置 (OUTPUT CONFIGURATION) ---
 OUTPUT_FILE = "fwd-ip-list.rsc"     
 ADDRESS_LIST_NAME = "ProxyRouteIPs" 
 COMMENT_PREFIX = "RouteIP-"       
 
-# --- 函数定义 (Functions) ---
-
 def doh_resolve(domain):
-    """使用 Google DOH API 解析域名并返回 IPv4 地址列表 (通过 IP 直连)"""
-    
-    # 使用 IP 地址直连 Google DOH API
     url = f"https://{DOH_IP}/resolve" 
     
     headers = {
         'accept': 'application/json',
-        # 关键：显式设置 Host 头部，确保 SSL 证书验证
         'Host': DOH_HOSTNAME 
     }
     params = {
         'name': domain,
-        'type': 'A' # 请求 IPv4 地址
+        'type': 'A' 
     }
     
     try:
@@ -47,18 +37,16 @@ def doh_resolve(domain):
         ips = []
         if 'Answer' in data:
             for answer in data['Answer']:
-                if answer['type'] == 1: # A record type
+                if answer['type'] == 1: 
                     ips.append(answer['data']) 
         return ips
         
     except requests.exceptions.RequestException as e:
-        # print(f"DOH Connection/Resolution failed for {domain} (Google DOH)")
         return []
     except json.JSONDecodeError:
         return []
 
 def extract_domains(data_content):
-    """从 Base64 解码后的内容中提取域名"""
     domains = set()
     for line in data_content.splitlines():
         line = line.strip()
@@ -80,7 +68,6 @@ def extract_domains(data_content):
     return sorted(list(domains))
 
 def fetch_and_decode_data():
-    """下载并解码远程数据"""
     print(f"🌐 正在获取数据...")
     try:
         response = requests.get(REMOTE_DATA_URL, timeout=30)
@@ -95,15 +82,10 @@ def fetch_and_decode_data():
         return None
 
 def generate_mikrotik_rsc(domains):
-    """生成 Mikrotik Address List (.rsc) 配置内容"""
     
-    # 使用安全的日期格式，避免 Mikrotik 误判
-    current_time = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    
-    rsc_content = f"# Generated: {current_time}\n"
-    
-    # *** 关键修复 1：将 remove 命令放在独立一行，并带上前缀 ***
-    rsc_content += f"/ip firewall address-list remove [find list={ADDRESS_LIST_NAME}]\n\n"
+    rsc_content = f"# Mikrotik Policy IP List\n" 
+    # 关键修复：使用完整路径和双引号
+    rsc_content += f'/ip firewall address-list remove [find list="{ADDRESS_LIST_NAME}"]\n\n'
     
     print("--- 正在进行 DOH 解析 (预计需要 15-30 分钟)... ---")
     
@@ -118,7 +100,7 @@ def generate_mikrotik_rsc(domains):
                 if re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$', ip): 
                     safe_comment = (COMMENT_PREFIX + domain)[:63] 
                     rsc_command = (
-                        # *** 关键修复 2：确保每条 add 命令都有前缀 ***
+                        # 关键修复：使用完整路径和双引号
                         f'/ip firewall address-list add address="{ip}" ' 
                         f'list="{ADDRESS_LIST_NAME}" '
                         f'comment="{safe_comment}"\n'
