@@ -1,17 +1,20 @@
 import requests
-import base64 # 修复：确保 base64 库被导入
+import base64 
 import re
 import os
 import sys
 import json
-import socket # 仍保留，以防万一
+import socket 
 
 # --- 配置 (CONFIGURATION) ---
+# 远程数据源 URL
 REMOTE_DATA_URL = "https://raw.githubusercontent.com/gfwlist/gfwlist/master/gfwlist.txt"
 
 # --- DOH 配置 ---
-DOH_ENDPOINT = "https://cloudflare-dns.com/dns-query" # 使用 Cloudflare DOH Endpoint
-TIMEOUT_SECONDS = 10 # 增加超时时间，以应对 Cloudflare 的限速
+# 核心修复：直接使用 DOH 服务器的 IP 地址，绕过 Runner 的 DNS 故障
+DOH_IP = "104.16.249.249"
+DOH_HOSTNAME = "cloudflare-dns.com"
+TIMEOUT_SECONDS = 15 # 增加超时时间，以应对 Cloudflare 的限速
 
 # --- 输出配置 (OUTPUT CONFIGURATION) ---
 OUTPUT_FILE = "fwd-ip-list.rsc"     
@@ -21,9 +24,15 @@ COMMENT_PREFIX = "RouteIP-"
 # --- 函数定义 (Functions) ---
 
 def doh_resolve(domain):
-    """使用 Cloudflare DOH API 解析域名并返回 IPv4 地址列表"""
+    """使用 Cloudflare DOH API 解析域名并返回 IPv4 地址列表 (通过 IP 直连)"""
+    
+    # 构建 URL，使用 IP 地址直连
+    url = f"https://{DOH_IP}/dns-query" 
+    
     headers = {
-        'accept': 'application/dns-json'
+        'accept': 'application/dns-json',
+        # 关键：显式设置 Host 头部，确保 SSL 证书验证和路由正确
+        'Host': DOH_HOSTNAME 
     }
     params = {
         'name': domain,
@@ -31,8 +40,8 @@ def doh_resolve(domain):
     }
     
     try:
-        # 使用更大的超时时间
-        response = requests.get(DOH_ENDPOINT, params=params, headers=headers, timeout=TIMEOUT_SECONDS)
+        # 使用 IP 地址连接，并传递 Hostname
+        response = requests.get(url, params=params, headers=headers, timeout=TIMEOUT_SECONDS)
         response.raise_for_status()
         data = response.json()
         
@@ -43,7 +52,9 @@ def doh_resolve(domain):
                     ips.append(answer['data'])
         return ips
         
-    except requests.exceptions.RequestException:
+    except requests.exceptions.RequestException as e:
+        # 如果连接失败，打印信息以便调试
+        # print(f"DOH Connection failed for {domain}: {e}")
         return []
     except json.JSONDecodeError:
         return []
@@ -79,7 +90,6 @@ def fetch_and_decode_data():
         
         b64_content = response.text
         raw_content = re.sub(r'!.*\n', '', b64_content)
-        # GFWList 数据经过 Base64 编码，所以需要 base64.b64decode
         decoded_content = base64.b64decode(raw_content).decode('utf-8') 
         return decoded_content
     except Exception as e:
@@ -90,18 +100,18 @@ def generate_mikrotik_rsc(domains):
     """生成 Mikrotik Address List (.rsc) 配置内容"""
     rsc_content = f"# IP Address List for Policy Routing\n"
     rsc_content += f"# Generated at: {os.popen('date -u').read().strip()}\n"
-    rsc_content += f"# Source: Remote Domain List via DOH\n\n"
+    rsc_content += f"# Source: Remote Domain List via DOH (Cloudflare IP)\n\n"
     
     rsc_content += f"/ip firewall address-list\n"
     rsc_content += f"remove [find list={ADDRESS_LIST_NAME}]\n\n"
 
-    print("--- 正在进行 DOH 解析 (预计需要 10-20 分钟)... ---")
+    print("--- 正在进行 DOH 解析 (预计需要 15-30 分钟)... ---")
     
     count = 0
     resolved_ips = set() 
     
     for domain in domains:
-        ips = doh_resolve(domain) # 使用 DOH 解析
+        ips = doh_resolve(domain) 
         
         for ip in ips:
             if ip not in resolved_ips:
