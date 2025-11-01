@@ -13,15 +13,16 @@ jobs:
   generate_mikrotik_list:
     runs-on: ubuntu-latest
     
-    # *** 关键修复：授予写入权限，解决 403 错误 ***
+    # *** 关键修复：此块授予写入权限，解决 403 错误 ***
     permissions:
       contents: write 
-    # ************************
+    # ****************************************************
       
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
         with:
+          # actions/checkout@v4 默认使用 GITHUB_TOKEN，此行是正确的
           token: ${{ secrets.GITHUB_TOKEN }}
           
       - name: 设置 Python 环境
@@ -38,6 +39,7 @@ jobs:
       - name: 检查并提交更改
         id: commit_check
         run: |
+          # 检查文件是否有变化
           git status
           if [ -n "$(git status --porcelain)" ]; then
             echo "has_changes=true" >> $GITHUB_OUTPUT
@@ -52,4 +54,5 @@ jobs:
           git config --global user.email 'actions@github.com'
           git add fwd-ip-list.rsc
           git commit -m "🤖 自动更新策略路由 IP 列表"
+          # git push 此时应能正常工作，因为权限已在 job 级别设置
           git push
