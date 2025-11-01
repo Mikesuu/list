@@ -1,0 +1,51 @@
+name: 自动更新策略路由列表
+
+on:
+  workflow_dispatch:  # 允许手动触发
+  schedule:
+    # 每天 UTC 时间 00:00 运行一次 (北京时间早上 8:00)
+    - cron: '0 0 * * *' 
+  push:
+    paths:
+      - 'src/**' # 脚本更新时也运行
+
+jobs:
+  generate_mikrotik_list:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        # 必须允许拉取和推送，以便后续提交文件
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: 设置 Python 环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+          
+      - name: 安装依赖
+        run: pip install requests dnspython
+
+      - name: 运行 Python 脚本生成 RSC 文件
+        run: python src/domain_processor.py
+
+      - name: 检查并提交更改
+        id: commit_check
+        run: |
+          # 检查文件是否有实际变化
+          git status
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::set-output name=has_changes::true"
+          else
+            echo "::set-output name=has_changes::false"
+          fi
+          
+      - name: 提交更新到仓库
+        if: steps.commit_check.outputs.has_changes == 'true'
+        run: |
+          git config --global user.name 'GitHub Actions Bot'
+          git config --global user.email 'actions@github.com'
+          git add fwd-ip-list.rsc
+          git commit -m "🤖 自动更新策略路由 IP 列表"
+          git push
