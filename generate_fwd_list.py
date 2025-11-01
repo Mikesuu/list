@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-import urllib.request
+import requests
 import base64
 import re
 import os
 import socket
 import sys
-import requests # 引入requests，简化下载和错误处理
 
 # --- 配置 (CONFIGURATION) ---
 # 远程数据源 URL (指向 GFWList 的实际链接)
@@ -22,13 +21,13 @@ def extract_domains(data_content):
     """从 Base64 解码后的内容中提取域名"""
     domains = set()
     
-    # 规则解析 (保留您的简化逻辑)
+    # 规则解析 (提取域名)
     for line in data_content.splitlines():
         line = line.strip()
         if not line or line.startswith('!') or line.startswith('['):
             continue
 
-        # 匹配 ||.domain.com, |https://domain.com, |http://domain.com
+        # 匹配常见的域名格式
         match_domain = re.search(r'(?:\|\||\.(?:\*))?([a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+|[a-zA-Z0-9-]+\.[a-zA-Z0-9-]+)', line)
         
         if match_domain:
@@ -42,9 +41,6 @@ def extract_domains(data_content):
                  domain = domain[1:]
                 
             if domain and '.' in domain:
-                 # GFWList 中有很多子域名，只保留主域名以减少条目数
-                 # (例如 *.youtube.com 只保留 youtube.com)
-                 # 这里我们保留所有提取的，以便精确解析
                  domains.add(domain)
 
     return sorted(list(domains))
@@ -53,7 +49,6 @@ def fetch_and_decode_data():
     """下载并解码远程数据"""
     print(f"🌐 正在从 {REMOTE_DATA_URL} 获取数据...")
     try:
-        # 使用 requests 替代 urllib.request，更稳定
         response = requests.get(REMOTE_DATA_URL, timeout=30)
         response.raise_for_status() # 检查HTTP错误
         
@@ -71,8 +66,9 @@ def generate_mikrotik_rsc(domains):
     rsc_content += f"# Generated at: {os.popen('date -u').read().strip()}\n"
     rsc_content += f"# Source: {REMOTE_DATA_URL} (Domain list source)\n\n"
     
-    # 清除旧列表的命令，确保每次导入都是最新的
-    rsc_content += f"/ip firewall address-list remove [find list={ADDRESS_LIST_NAME}]\n\n"
+    # 强制清除旧列表，确保每次导入都是最新的，并从 /ip firewall address-list 开始
+    rsc_content += f"/ip firewall address-list\n"
+    rsc_content += f"remove [find list={ADDRESS_LIST_NAME}]\n\n"
 
     print("--- 正在进行 DNS 解析 (可能耗时较久)... ---")
     
@@ -90,10 +86,9 @@ def generate_mikrotik_rsc(domains):
             for ip in ips:
                 if ip not in resolved_ips:
                     # 格式化成 Address List 导入命令
-                    # 限制注释长度，避免Mikrotik注释超长报错
                     safe_comment = (COMMENT_PREFIX + domain)[:63] 
                     rsc_command = (
-                        f'/ip firewall address-list add address="{ip}" '
+                        f'add address="{ip}" '
                         f'list="{ADDRESS_LIST_NAME}" '
                         f'comment="{safe_comment}"\n'
                     )
@@ -102,10 +97,8 @@ def generate_mikrotik_rsc(domains):
                     count += 1
             
         except socket.gaierror:
-            # print(f"Could not resolve {domain}")
             continue
-        except Exception as e:
-            # print(f"Error resolving {domain}: {e}")
+        except Exception:
             continue
 
     print(f"✅ 成功解析并生成 {count} 条 IP 地址条目。")
