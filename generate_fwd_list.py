@@ -5,21 +5,16 @@ import re
 import os
 import socket
 import sys
+import requests # 引入requests，简化下载和错误处理
 
 # --- 配置 (CONFIGURATION) ---
 # 远程数据源 URL (指向 GFWList 的实际链接)
 REMOTE_DATA_URL = "https://raw.githubusercontent.com/gfwlist/gfwlist/master/gfwlist.txt"
-OUTPUT_FILE = "fwd_list_mikrotik_dns.rsc"
 
-# 默认转发 DNS 服务器 (Google Public DNS)
-DEFAULT_DNS = "8.8.8.8"
-DEFAULT_DNS_SECONDARY = "8.8.4.4"
-
-# 使用 Google 的 DoH 服务器 IP
-# Mikrotik FWD (转发) 类型需要指定 IP 地址
-FWD_SERVER_IP_1 = "8.8.8.8"      
-FWD_SERVER_IP_2 = "8.8.4.4"     
-FWD_COMMENT = "Domain_FwdList"   # 用于 Mikrotik 条目的注释
+# --- 输出配置 (OUTPUT CONFIGURATION) ---
+OUTPUT_FILE = "fwd-ip-list.rsc"     # Mikrotik将下载的新文件
+ADDRESS_LIST_NAME = "ProxyList"    # 供 Mangle 规则使用的地址列表名称
+COMMENT_PREFIX = "ProxyIP-"       # 地址列表条目的注释前缀
 
 # --- 函数定义 ---
 
@@ -27,14 +22,13 @@ def extract_domains(data_content):
     """从 Base64 解码后的内容中提取域名"""
     domains = set()
     
-    # 规则解析 (简化版，提取常见的域名格式)
+    # 规则解析 (保留您的简化逻辑)
     for line in data_content.splitlines():
         line = line.strip()
         if not line or line.startswith('!') or line.startswith('['):
             continue
 
         # 匹配 ||.domain.com, |https://domain.com, |http://domain.com
-        # 匹配以 . 或 || 开头，后面跟着域名的部分
         match_domain = re.search(r'(?:\|\||\.(?:\*))?([a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+|[a-zA-Z0-9-]+\.[a-zA-Z0-9-]+)', line)
         
         if match_domain:
@@ -43,13 +37,14 @@ def extract_domains(data_content):
             # 过滤掉 IP 地址
             if re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$', domain):
                 continue
-            
-            # 提取有效的域名部分
+                
             if domain.startswith('.'):
                  domain = domain[1:]
-            
-            # 确保是有效的域名格式
+                
             if domain and '.' in domain:
+                 # GFWList 中有很多子域名，只保留主域名以减少条目数
+                 # (例如 *.youtube.com 只保留 youtube.com)
+                 # 这里我们保留所有提取的，以便精确解析
                  domains.add(domain)
 
     return sorted(list(domains))
@@ -58,42 +53,62 @@ def fetch_and_decode_data():
     """下载并解码远程数据"""
     print(f"🌐 正在从 {REMOTE_DATA_URL} 获取数据...")
     try:
-        with urllib.request.urlopen(REMOTE_DATA_URL, timeout=30) as response:
-            b64_content = response.read().decode('utf-8')
-            # 移除头部注释
-            raw_content = re.sub(r'!.*\n', '', b64_content)
-            decoded_content = base64.b64decode(raw_content).decode('utf-8')
-            return decoded_content
+        # 使用 requests 替代 urllib.request，更稳定
+        response = requests.get(REMOTE_DATA_URL, timeout=30)
+        response.raise_for_status() # 检查HTTP错误
+        
+        b64_content = response.text
+        raw_content = re.sub(r'!.*\n', '', b64_content)
+        decoded_content = base64.b64decode(raw_content).decode('utf-8')
+        return decoded_content
     except Exception as e:
         print(f"❌ 错误: 无法获取或解码远程数据: {e}", file=sys.stderr)
         return None
 
 def generate_mikrotik_rsc(domains):
-    """生成 Mikrotik .rsc 配置内容"""
-    rsc_content = f"# Domain FwdList DNS Static Entries for Mikrotik\n"
+    """生成 Mikrotik Address List (.rsc) 配置内容"""
+    rsc_content = f"# IP Address List for Proxy Policy Routing\n"
     rsc_content += f"# Generated at: {os.popen('date -u').read().strip()}\n"
-    rsc_content += f"# Source: {REMOTE_DATA_URL} (Used as data source)\n\n"
-    rsc_content += "/ip dns static\n"
-
-    # 使用 DoH 转发策略的 IP 地址
-    target_ip = f"{FWD_SERVER_IP_1},{FWD_SERVER_IP_2}"
-    comment = FWD_COMMENT
+    rsc_content += f"# Source: {REMOTE_DATA_URL} (Domain list source)\n\n"
     
-    rsc_content += f"# 导入前建议在 Mikrotik 终端清理旧条目: \n"
-    rsc_content += f"# /ip dns static remove [find comment~\"{comment}\"]\n\n"
+    # 清除旧列表的命令，确保每次导入都是最新的
+    rsc_content += f"/ip firewall address-list remove [find list={ADDRESS_LIST_NAME}]\n\n"
+
+    print("--- 正在进行 DNS 解析 (可能耗时较久)... ---")
     
     count = 0
+    resolved_ips = set() # 用于去重IP地址
+    
     for domain in domains:
-        # 使用 type=FWD (转发)，match-subdomain=yes 匹配所有子域名
-        rsc_content += (
-            f"add name=\"{domain}\" "
-            f"type=FWD match-subdomain=yes "
-            f"forward-to={target_ip} "
-            f"comment=\"{comment}\"\n"
-        )
-        count += 1
-        
-    print(f"✅ 成功生成 {count} 条目。目标转发地址: {target_ip}")
+        try:
+            # 尝试获取 IPv4 地址
+            addr_info = socket.getaddrinfo(domain, 80, socket.AF_INET, socket.SOCK_STREAM)
+            
+            # 提取所有唯一的 IPv4 地址
+            ips = [info[4][0] for info in addr_info]
+            
+            for ip in ips:
+                if ip not in resolved_ips:
+                    # 格式化成 Address List 导入命令
+                    # 限制注释长度，避免Mikrotik注释超长报错
+                    safe_comment = (COMMENT_PREFIX + domain)[:63] 
+                    rsc_command = (
+                        f'/ip firewall address-list add address="{ip}" '
+                        f'list="{ADDRESS_LIST_NAME}" '
+                        f'comment="{safe_comment}"\n'
+                    )
+                    rsc_content += rsc_command
+                    resolved_ips.add(ip)
+                    count += 1
+            
+        except socket.gaierror:
+            # print(f"Could not resolve {domain}")
+            continue
+        except Exception as e:
+            # print(f"Error resolving {domain}: {e}")
+            continue
+
+    print(f"✅ 成功解析并生成 {count} 条 IP 地址条目。")
     return rsc_content
 
 def main():
@@ -112,7 +127,7 @@ def main():
     try:
         with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
             f.write(rsc_data)
-        print(f"✅ 成功将 Mikrotik 脚本写入 {OUTPUT_FILE}")
+        print(f"✅ 成功将 Mikrotik IP 地址脚本写入 {OUTPUT_FILE}")
         
     except Exception as e:
         print(f"❌ 写入文件失败: {e}", file=sys.stderr)
