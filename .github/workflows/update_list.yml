@@ -1,13 +1,13 @@
 name: 自动更新策略路由列表
 
 on:
-  workflow_dispatch:  # 允许手动触发
+  workflow_dispatch:  
   schedule:
-    # 每天 UTC 时间 00:00 运行一次 (北京时间早上 8:00)
+    # 每天 UTC 时间 00:00 运行一次
     - cron: '0 0 * * *' 
   push:
     paths:
-      - 'src/**' # 脚本更新时也运行
+      - 'src/**' 
 
 jobs:
   generate_mikrotik_list:
@@ -15,7 +15,6 @@ jobs:
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
-        # 必须允许拉取和推送，以便后续提交文件
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           
@@ -25,7 +24,8 @@ jobs:
           python-version: '3.x'
           
       - name: 安装依赖
-        run: pip install requests dnspython
+        # 只需要 requests 库进行 DOH 请求
+        run: pip install requests 
 
       - name: 运行 Python 脚本生成 RSC 文件
         run: python src/domain_processor.py
@@ -33,12 +33,11 @@ jobs:
       - name: 检查并提交更改
         id: commit_check
         run: |
-          # 检查文件是否有实际变化
           git status
           if [ -n "$(git status --porcelain)" ]; then
-            echo "::set-output name=has_changes::true"
+            echo "has_changes=true" >> $GITHUB_OUTPUT
           else
-            echo "::set-output name=has_changes::false"
+            echo "has_changes=false" >> $GITHUB_OUTPUT
           fi
           
       - name: 提交更新到仓库
