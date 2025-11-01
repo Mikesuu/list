@@ -4,14 +4,14 @@ import re
 import os
 import sys
 import json
-import socket 
+import socket # 仍保留，以防万一
 
 # --- 配置 (CONFIGURATION) ---
 REMOTE_DATA_URL = "https://raw.githubusercontent.com/gfwlist/gfwlist/master/gfwlist.txt"
 
 # --- DOH 配置 ---
-DOH_ENDPOINT = "https://cloudflare-dns.com/dns-query" 
-TIMEOUT_SECONDS = 5
+DOH_ENDPOINT = "https://cloudflare-dns.com/dns-query" # 使用 Cloudflare DOH Endpoint
+TIMEOUT_SECONDS = 10 # 增加超时时间，以应对 Cloudflare 的限速
 
 # --- 输出配置 (OUTPUT CONFIGURATION) ---
 OUTPUT_FILE = "fwd-ip-list.rsc"     
@@ -31,6 +31,7 @@ def doh_resolve(domain):
     }
     
     try:
+        # 使用更大的超时时间
         response = requests.get(DOH_ENDPOINT, params=params, headers=headers, timeout=TIMEOUT_SECONDS)
         response.raise_for_status()
         data = response.json()
@@ -94,13 +95,13 @@ def generate_mikrotik_rsc(domains):
     rsc_content += f"/ip firewall address-list\n"
     rsc_content += f"remove [find list={ADDRESS_LIST_NAME}]\n\n"
 
-    print("--- 正在进行 DOH 解析 (可能耗时较久)... ---")
+    print("--- 正在进行 DOH 解析 (预计需要 10-20 分钟)... ---")
     
     count = 0
     resolved_ips = set() 
     
     for domain in domains:
-        ips = doh_resolve(domain)
+        ips = doh_resolve(domain) # 使用 DOH 解析
         
         for ip in ips:
             if ip not in resolved_ips:
@@ -128,7 +129,7 @@ def main():
         print("❌ 未提取到任何有效域名。", file=sys.stderr)
         sys.exit(1)
 
-    rsc_data = generate_mikrotik_rsc(domains)
+    rsc_data = generate_mikrotik_rsc(domains) 
     
     try:
         output_path = os.path.join(os.path.dirname(__file__), '..', OUTPUT_FILE)
