@@ -1,0 +1,47 @@
+name: Daily Update Domain Forward List
+
+on:
+  schedule:
+    - cron: '0 0 * * *'  # 每天 UTC 00:00 运行
+  workflow_dispatch:      # 允许手动触发
+
+jobs:
+  update:
+    # 授予写入权限以允许 GitHub Actions Bot 提交代码
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Run Python script to generate Mikrotik list
+        # 运行 generate_fwd_list.py
+        run: python generate_fwd_list.py
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Commit and push if changed
+        run: |
+          GIT_FILE="fwd_list_mikrotik_dns.rsc"
+          git add $GIT_FILE
+          
+          # 检查文件内容是否有变化
+          if ! git diff --quiet HEAD -- $GIT_FILE; then
+            echo "Changes detected, committing and pushing..."
+            git commit -m "Update Domain FwdList DNS entries [$(date -u)]"
+            git push
+          else
+            echo "No changes in $GIT_FILE, skipping commit."
+          fi
